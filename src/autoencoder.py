@@ -81,8 +81,8 @@ class TextAutoencoder(object):
                 else (lstm_units, self.vocab_size)
             self.projection_w = tf.get_variable('projection_w', shape,
                                                 initializer=initializer)
-            initializer = tf.zeros_initializer((self.vocab_size,))
-            self.projection_b = tf.get_variable('projection_b',
+            initializer = tf.zeros_initializer()
+            self.projection_b = tf.get_variable('projection_b', shape=[self.vocab_size],
                                                 initializer=initializer)
             embedded = tf.nn.embedding_lookup(self.embeddings, self.sentence)
             embedded = tf.nn.dropout(embedded, self.dropout_keep)
@@ -130,7 +130,7 @@ class TextAutoencoder(object):
             # The BW LSTM sees the input in reverse order but make predictions
             # in forward order
             with tf.variable_scope(fw_scope_name, reuse=True) as fw_scope:
-                res = tf.nn.seq2seq.rnn_decoder(decoder_input,
+                res = tf.contrib.legacy_seq2seq.rnn_decoder(decoder_input,
                                                 encoded_state_fw,
                                                 self.lstm_fw,
                                                 scope=fw_scope)
@@ -138,7 +138,7 @@ class TextAutoencoder(object):
 
             if bidirectional:
                 with tf.variable_scope(bw_scope_name, reuse=True) as bw_scope:
-                    res = tf.nn.seq2seq.rnn_decoder(decoder_input,
+                    res = tf.contrib.legacy_seq2seq.rnn_decoder(decoder_input,
                                                     encoded_state_bw,
                                                     self.lstm_bw,
                                                     scope=bw_scope)
@@ -152,7 +152,7 @@ class TextAutoencoder(object):
             for output in raw_outputs:
                 if bidirectional:
                     # here, each output is (output_fw, output_bw)
-                    output = tf.concat(1, output)
+                    output = tf.concat(output, 1)
                 dropout = tf.nn.dropout(output, self.dropout_keep)
                 self.decoder_outputs.append(dropout)
 
@@ -171,7 +171,7 @@ class TextAutoencoder(object):
             with tf.variable_scope(bw_scope_name, reuse=True):
                 ret_bw = self.lstm_bw(embedded_step, state_bw)
                 step_output_bw, self.decoder_bw_step_state = ret_bw
-                step_output = tf.concat(1, [step_output_fw, step_output_bw])
+                step_output = tf.concat([step_output_fw, step_output_bw], 1)
         else:
             step_output = step_output_fw
         self.projected_step_output = tf.nn.xw_plus_b(step_output,
@@ -189,8 +189,7 @@ class TextAutoencoder(object):
         """
         if num_steps is None:
             num_steps = self.num_time_steps
-        return [tf.squeeze(step, [1])
-                for step in tf.split(1, num_steps, tensor)]
+        return [tf.squeeze(step, [1]) for step in tf.split(tensor, num_steps, 1)]
 
     def _create_training_tensors(self):
         """
@@ -209,15 +208,22 @@ class TextAutoencoder(object):
 
         projection_w_t = tf.transpose(self.projection_w)
 
-        def loss_function(inputs, labels):
-            labels = tf.reshape(labels, (-1, 1))
+        def loss_function(labels, logits):
+            labels = tf.cast(labels, tf.int64)
+            labels = tf.reshape(labels, [-1, 1])
+            logits = tf.cast(logits, tf.float32)
             return tf.nn.sampled_softmax_loss(projection_w_t,
                                               self.projection_b,
-                                              inputs, labels,
+                                              labels, logits,
                                               100, self.vocab_size)
-        labeled_loss = tf.nn.seq2seq.sequence_loss(self.decoder_outputs,
-                                                   decoder_labels,
-                                                   label_weights,
+
+        # labeled_loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example(self.decoder_outputs,
+        #                                                 decoder_labels,
+        #                                                 label_weights,
+        #                                                 softmax_loss_function=loss_function)
+        labeled_loss = tf.contrib.seq2seq.sequence_loss(tf.convert_to_tensor(self.decoder_outputs),
+                                                   tf.convert_to_tensor(decoder_labels),
+                                                   tf.convert_to_tensor(label_weights),
                                                    softmax_loss_function=loss_function)
         # self.loss = labeled_loss + self.compute_l2_loss()
         self.loss = labeled_loss
@@ -331,7 +337,7 @@ class TextAutoencoder(object):
                     'bidirectional': self.bidirectional
                     }
         metadata_path = os.path.join(directory, 'metadata.json')
-        with open(metadata_path, 'wb') as f:
+        with open(metadata_path, 'w') as f:
             json.dump(metadata, f)
 
     @classmethod

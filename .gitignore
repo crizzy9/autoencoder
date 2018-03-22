@@ -1,2 +1,6 @@
 *.pyc
 .idea
+model/
+out/
+src/testing_file.txt
+src/training_file.txt
